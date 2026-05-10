@@ -1,5 +1,6 @@
 {
     "name": "BrewSense",
+    "description": "Smart coffee maker state tracking and statistics for Home Assistant using power consumption analysis.",
     "content_in_root": true,
     "domains": [
         "brewsense"
