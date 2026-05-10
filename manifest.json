@@ -1,0 +1,12 @@
+{
+    "domain": "brewsense",
+    "name": "BrewSense",
+    "version": "0.1.0",
+    "documentation": "https://github.com/aengeln/homeassistant-brewsense",
+    "issue_tracker": "https://github.com/aengeln/homeassistant-brewsense/issues",
+    "codeowners": [
+        "@aengeln"
+    ],
+    "iot_class": "calculated",
+    "config_flow": true
+}

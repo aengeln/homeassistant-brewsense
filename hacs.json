@@ -1,0 +1,8 @@
+{
+    "name": "BrewSense",
+    "content_in_root": true,
+    "domains": [
+        "brewsense"
+    ],
+    "homeassistant": "2025.1.0"
+}
