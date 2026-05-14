@@ -8,7 +8,6 @@ import logging
 
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.event import (
-    async_call_later,
     async_track_state_change_event,
 )
 from homeassistant.helpers.storage import Store
@@ -24,14 +23,12 @@ from .const import (
     ATTR_LAST_MONTH_CUPS,
     ATTR_MONTH_CUPS,
     ATTR_SESSION_CUPS,
-    CONF_AUTO_TURN_OFF_DELAY,
     CONF_BREW_THRESHOLD,
     CONF_DRIP_DELAY,
     CONF_POWER_SENSOR,
     CONF_READY_LINGER,
     CONF_SECONDS_PER_CUP,
     CONF_SWITCH_ENTITY,
-    DEFAULT_AUTO_TURN_OFF_DELAY,
     DEFAULT_BREW_THRESHOLD,
     DEFAULT_DRIP_DELAY,
     DEFAULT_READY_LINGER,
@@ -88,10 +85,6 @@ class BrewSenseCoordinator:
             DEFAULT_READY_LINGER,
         )
 
-        self._auto_turn_off_delay = entry.data.get(
-            CONF_AUTO_TURN_OFF_DELAY,
-            DEFAULT_AUTO_TURN_OFF_DELAY,
-        )
 
         # Runtime state
         self._state = STATE_OFF
@@ -115,7 +108,6 @@ class BrewSenseCoordinator:
         # Timer unsubscribers
         self._drip_timer: Callable | None = None
         self._linger_timer: Callable | None = None
-        self._auto_off_timer: Callable | None = None
         self._brew_update_timer: Callable | None = None
 
         # Event unsubscribers
@@ -242,7 +234,6 @@ class BrewSenseCoordinator:
         if self._current_power > 0:
             self._state = STATE_WARMING
             self._coffee_available = True
-            self._start_auto_off_timer()
             return
 
         self._state = STATE_OFF
@@ -315,46 +306,8 @@ class BrewSenseCoordinator:
 
         self._state = STATE_WARMING
         self._coffee_available = True
-
-        self._start_auto_off_timer()
         self.async_update_listeners()
 
-    def _start_auto_off_timer(self) -> None:
-        """Start auto turn-off timer."""
-
-        if self._auto_off_timer:
-            self._auto_off_timer()
-            self._auto_off_timer = None
-
-        if self._auto_turn_off_delay < 0:
-            return
-
-        self._auto_off_timer = async_call_later(
-            self.hass,
-            self._auto_turn_off_delay * 60,
-            self._auto_turn_off,
-        )
-
-    @callback
-    def _auto_turn_off(self, _now) -> None:
-        """Turn off the configured switch."""
-
-        _LOGGER.debug("Auto turn off triggered")
-
-        self._auto_off_timer = None
-
-        domain = self.switch_entity.split(".")[0]
-
-        self.hass.async_create_task(
-            self.hass.services.async_call(
-                domain,
-                "turn_off",
-                {
-                    "entity_id": self.switch_entity,
-                },
-                blocking=False,
-            )
-        )
 
     def _handle_machine_off(self) -> None:
         """Handle machine turning off."""
@@ -506,7 +459,6 @@ class BrewSenseCoordinator:
         for timer_attr in [
             "_drip_timer",
             "_linger_timer",
-            "_auto_off_timer",
         ]:
             timer = getattr(self, timer_attr)
             if timer:
