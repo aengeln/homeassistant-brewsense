@@ -61,7 +61,7 @@ class BrewSenseStateSensor(BrewSenseBaseSensor):
     def __init__(self, coordinator, entry) -> None:
         """Initialize the sensor."""
 
-        super().__init__(coordinator, entry, "state", None)
+        super().__init__(coordinator, entry, "state", "State")
 
     @property
     def native_value(self):

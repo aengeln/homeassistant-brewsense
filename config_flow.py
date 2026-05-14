@@ -1,5 +1,3 @@
-
-
 """Config flow for the BrewSense integration."""
 
 from __future__ import annotations
@@ -10,14 +8,12 @@ from homeassistant import config_entries
 from homeassistant.helpers import selector
 
 from .const import (
-    CONF_AUTO_TURN_OFF_DELAY,
     CONF_BREW_THRESHOLD,
     CONF_DRIP_DELAY,
     CONF_POWER_SENSOR,
     CONF_READY_LINGER,
     CONF_SECONDS_PER_CUP,
     CONF_SWITCH_ENTITY,
-    DEFAULT_AUTO_TURN_OFF_DELAY,
     DEFAULT_BREW_THRESHOLD,
     DEFAULT_DRIP_DELAY,
     DEFAULT_NAME,
@@ -95,18 +91,6 @@ class BrewSenseConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         max=7200,
                         step=60,
                         unit_of_measurement="s",
-                        mode=selector.NumberSelectorMode.BOX,
-                    )
-                ),
-                vol.Optional(
-                    CONF_AUTO_TURN_OFF_DELAY,
-                    default=DEFAULT_AUTO_TURN_OFF_DELAY,
-                ): selector.NumberSelector(
-                    selector.NumberSelectorConfig(
-                        min=0,
-                        max=720,
-                        step=1,
-                        unit_of_measurement="min",
                         mode=selector.NumberSelectorMode.BOX,
                     )
                 ),
