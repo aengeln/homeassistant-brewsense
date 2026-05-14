@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
 
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.event import (
+    async_call_later,
     async_track_state_change_event,
 )
 from homeassistant.helpers.storage import Store
@@ -95,6 +96,7 @@ class BrewSenseCoordinator:
         self._brew_finished_at: datetime | None = None
         self._last_brew_duration = 0
         self._last_brew_finished_at: datetime | None = None
+        self._dripping_ends_at: datetime | None = None
 
         # Statistics
         self._session_cups = 0
@@ -109,6 +111,7 @@ class BrewSenseCoordinator:
         self._drip_timer: Callable | None = None
         self._linger_timer: Callable | None = None
         self._brew_update_timer: Callable | None = None
+        self._dripping_update_timer: Callable | None = None
 
         # Event unsubscribers
         self._power_listener: Callable | None = None
@@ -179,9 +182,11 @@ class BrewSenseCoordinator:
         self._update_current_power()
 
         _LOGGER.debug(
-            "Power changed to %.1fW while state is %s",
+            "Power %.1fW | State=%s | Threshold=%.1f | CoffeeAvailable=%s",
             self._current_power,
             self._state,
+            self._brew_threshold,
+            self._coffee_available,
         )
 
         # Brewing started
@@ -228,7 +233,15 @@ class BrewSenseCoordinator:
         """Set a sensible startup state from current power."""
 
         if self._current_power >= self._brew_threshold:
-            self._enter_brewing()
+            _LOGGER.debug("Reconstructing active brewing state")
+
+            self._state = STATE_BREWING
+            self._coffee_available = False
+
+            if not self._brew_started_at:
+                self._brew_started_at = datetime.now()
+
+            self._start_brew_update_timer()
             return
 
         if self._current_power > 0:
@@ -262,6 +275,9 @@ class BrewSenseCoordinator:
         self._state = STATE_DRIPPING
         self._brew_finished_at = datetime.now()
         self._last_brew_finished_at = self._brew_finished_at
+        self._dripping_ends_at = (
+            datetime.now() + timedelta(seconds=self._drip_delay)
+        )
 
         self._stop_brew_update_timer()
 
@@ -281,6 +297,7 @@ class BrewSenseCoordinator:
 
         self.hass.async_create_task(self._save_storage())
         self.async_update_listeners()
+        self._schedule_dripping_update()
 
         if self._drip_delay <= 0:
             self._enter_warming()
@@ -297,6 +314,7 @@ class BrewSenseCoordinator:
         """Handle dripping finished."""
 
         self._drip_timer = None
+        self._dripping_ends_at = None
         self._enter_warming()
 
     def _enter_warming(self) -> None:
@@ -376,6 +394,27 @@ class BrewSenseCoordinator:
         if self._brew_update_timer:
             self._brew_update_timer()
             self._brew_update_timer = None
+
+    def _schedule_dripping_update(self) -> None:
+        """Schedule next dripping countdown refresh."""
+
+        self._dripping_update_timer = async_call_later(
+            self.hass,
+            1,
+            self._dripping_update,
+        )
+
+    @callback
+    def _dripping_update(self, _now) -> None:
+        """Refresh dripping countdown."""
+
+        self._dripping_update_timer = None
+
+        if self._state != STATE_DRIPPING:
+            return
+
+        self.async_update_listeners()
+        self._schedule_dripping_update()
 
     def _calculate_live_cups(self) -> float:
         """Calculate live cups during brewing."""
@@ -459,6 +498,7 @@ class BrewSenseCoordinator:
         for timer_attr in [
             "_drip_timer",
             "_linger_timer",
+            "_dripping_update_timer",
         ]:
             timer = getattr(self, timer_attr)
             if timer:
@@ -466,6 +506,19 @@ class BrewSenseCoordinator:
                 setattr(self, timer_attr, None)
 
         self._stop_brew_update_timer()
+
+    @property
+    def dripping_remaining(self) -> int:
+        """Return remaining drip time in seconds."""
+
+        if self._dripping_ends_at is None:
+            return 0
+
+        remaining = (
+            self._dripping_ends_at - datetime.now()
+        ).total_seconds()
+
+        return max(0, round(remaining))
 
     @property
     def state(self) -> str:

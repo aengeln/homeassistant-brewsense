@@ -8,6 +8,9 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 
+# No platform changes needed for dripping countdown.
+# The new sensor is exposed through sensor.py.
+
 from .const import DOMAIN
 from .coordinator import BrewSenseCoordinator
 
