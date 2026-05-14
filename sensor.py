@@ -1,5 +1,3 @@
-
-
 """Sensor platform for BrewSense."""
 
 from __future__ import annotations
@@ -18,6 +16,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
     async_add_entities(
         [
             BrewSenseStateSensor(coordinator, entry),
+            BrewSenseDrippingRemainingSensor(coordinator, entry),
             BrewSenseSessionCupsSensor(coordinator, entry),
             BrewSenseMonthCupsSensor(coordinator, entry),
             BrewSenseLastMonthCupsSensor(coordinator, entry),
@@ -69,11 +68,29 @@ class BrewSenseStateSensor(BrewSenseBaseSensor):
 
         return self.coordinator.state
 
-    @property
-    def extra_state_attributes(self):
-        """Return extra attributes."""
 
-        return self.coordinator.extra_attributes
+class BrewSenseDrippingRemainingSensor(BrewSenseBaseSensor):
+    """Dripping countdown sensor."""
+
+    _attr_icon = "mdi:timer-outline"
+    _attr_native_unit_of_measurement = "s"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, coordinator, entry) -> None:
+        """Initialize the sensor."""
+
+        super().__init__(
+            coordinator,
+            entry,
+            "dripping_remaining",
+            "Dripping remaining",
+        )
+
+    @property
+    def native_value(self):
+        """Return remaining drip seconds."""
+
+        return self.coordinator.dripping_remaining
 
 
 class BrewSenseSessionCupsSensor(BrewSenseBaseSensor):
