@@ -19,6 +19,7 @@ class BrewSenseSwitch(SwitchEntity):
     """BrewSense wrapper switch."""
 
     _attr_has_entity_name = True
+    _attr_should_poll = False
     _attr_name = None
     _attr_icon = "mdi:coffee-maker"
 

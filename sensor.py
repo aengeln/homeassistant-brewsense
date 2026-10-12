@@ -29,6 +29,7 @@ class BrewSenseBaseSensor(SensorEntity):
     """Base BrewSense sensor."""
 
     _attr_has_entity_name = True
+    _attr_should_poll = False
 
     def __init__(self, coordinator, entry, key: str, name: str | None) -> None:
         """Initialize the sensor."""
