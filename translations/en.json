@@ -1,0 +1,44 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Set up BrewSense",
+        "description": "Pick the power sensor and switch of your coffee maker. The timing values can be changed later under Configure.",
+        "data": {
+          "name": "Name",
+          "power_sensor": "Power sensor",
+          "switch_entity": "Switch",
+          "brew_threshold": "Brew power threshold (W)",
+          "seconds_per_cup": "Seconds per cup",
+          "drip_delay": "Drip delay (s)",
+          "ready_linger": "Keep coffee available after switch-off (s)"
+        },
+        "data_description": {
+          "brew_threshold": "Power draw at or above this value is treated as brewing.",
+          "seconds_per_cup": "Brew time per cup, used to estimate the number of cups.",
+          "drip_delay": "Time after brewing ends before the coffee counts as ready.",
+          "ready_linger": "How long coffee stays available after the machine is switched off."
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "BrewSense options",
+        "data": {
+          "brew_threshold": "Brew power threshold (W)",
+          "seconds_per_cup": "Seconds per cup",
+          "drip_delay": "Drip delay (s)",
+          "ready_linger": "Keep coffee available after switch-off (s)"
+        },
+        "data_description": {
+          "brew_threshold": "Power draw at or above this value is treated as brewing.",
+          "seconds_per_cup": "Brew time per cup, used to estimate the number of cups.",
+          "drip_delay": "Time after brewing ends before the coffee counts as ready.",
+          "ready_linger": "How long coffee stays available after the machine is switched off."
+        }
+      }
+    }
+  }
+}
