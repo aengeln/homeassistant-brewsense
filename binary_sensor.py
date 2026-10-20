@@ -25,6 +25,7 @@ class BrewSenseCoffeeAvailableBinarySensor(BinarySensorEntity):
     """Coffee available binary sensor."""
 
     _attr_has_entity_name = True
+    _attr_should_poll = False
     _attr_name = "Coffee available"
     _attr_icon = "mdi:coffee"
 

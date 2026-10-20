@@ -10,8 +10,10 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.event import (
     async_call_later,
     async_track_state_change_event,
+    async_track_time_change,
 )
 from homeassistant.helpers.storage import Store
+from homeassistant.util import dt as dt_util
 
 from .const import (
     ATTR_AVERAGE_MONTHLY_CUPS,
@@ -35,6 +37,7 @@ from .const import (
     DEFAULT_READY_LINGER,
     DEFAULT_SECONDS_PER_CUP,
     MINIMUM_VALID_BREW_TIME,
+    POWER_DEBOUNCE_SECONDS,
     STATE_BREWING,
     STATE_DRIPPING,
     STATE_OFF,
@@ -61,27 +64,29 @@ class BrewSenseCoordinator:
             f"brewsense_{entry.entry_id}",
         )
 
-        # Config
-        self.name = entry.data["name"]
-        self._power_sensor = entry.data[CONF_POWER_SENSOR]
-        self.switch_entity = entry.data[CONF_SWITCH_ENTITY]
+        # Config (options override the data from the initial setup)
+        config = {**entry.data, **entry.options}
 
-        self._brew_threshold = entry.data.get(
+        self.name = config["name"]
+        self._power_sensor = config[CONF_POWER_SENSOR]
+        self.switch_entity = config[CONF_SWITCH_ENTITY]
+
+        self._brew_threshold = config.get(
             CONF_BREW_THRESHOLD,
             DEFAULT_BREW_THRESHOLD,
         )
 
-        self._seconds_per_cup = entry.data.get(
+        self._seconds_per_cup = config.get(
             CONF_SECONDS_PER_CUP,
             DEFAULT_SECONDS_PER_CUP,
         )
 
-        self._drip_delay = entry.data.get(
+        self._drip_delay = config.get(
             CONF_DRIP_DELAY,
             DEFAULT_DRIP_DELAY,
         )
 
-        self._ready_linger = entry.data.get(
+        self._ready_linger = config.get(
             CONF_READY_LINGER,
             DEFAULT_READY_LINGER,
         )
@@ -97,6 +102,7 @@ class BrewSenseCoordinator:
         self._last_brew_duration = 0
         self._last_brew_finished_at: datetime | None = None
         self._dripping_ends_at: datetime | None = None
+        self._brew_dropped_at: datetime | None = None
 
         # Statistics
         self._session_cups = 0
@@ -112,6 +118,8 @@ class BrewSenseCoordinator:
         self._linger_timer: Callable | None = None
         self._brew_update_timer: Callable | None = None
         self._dripping_update_timer: Callable | None = None
+        self._brew_end_timer: Callable | None = None
+        self._midnight_listener: Callable | None = None
 
         # Event unsubscribers
         self._power_listener: Callable | None = None
@@ -136,6 +144,15 @@ class BrewSenseCoordinator:
             self._handle_switch_change,
         )
 
+        # Month changes must show up even when nothing else happens
+        self._midnight_listener = async_track_time_change(
+            self.hass,
+            self._handle_midnight,
+            hour=0,
+            minute=0,
+            second=0,
+        )
+
         self._update_current_power()
         self._reconstruct_state_from_power()
         self.async_update_listeners()
@@ -152,6 +169,10 @@ class BrewSenseCoordinator:
         if self._switch_listener:
             self._switch_listener()
             self._switch_listener = None
+
+        if self._midnight_listener:
+            self._midnight_listener()
+            self._midnight_listener = None
 
         self._cancel_timers()
 
@@ -179,7 +200,10 @@ class BrewSenseCoordinator:
     def _handle_power_change(self, event) -> None:
         """Handle power sensor changes."""
 
-        self._update_current_power()
+        if not self._update_current_power():
+            # Sensor unavailable: hold the current state instead of
+            # mistaking a connectivity blip for the machine switching off.
+            return
 
         _LOGGER.debug(
             "Power %.1fW | State=%s | Threshold=%.1f | CoffeeAvailable=%s",
@@ -189,22 +213,49 @@ class BrewSenseCoordinator:
             self._coffee_available,
         )
 
-        # Brewing started
-        if (
-            self._current_power >= self._brew_threshold
-            and self._state == STATE_OFF
-        ):
-            self._enter_brewing()
+        if self._current_power >= self._brew_threshold:
+            if self._state == STATE_BREWING:
+                # Heating element cycling: the dip was only temporary
+                self._cancel_brew_end_timer()
+            else:
+                # Also covers a new brew started without power cycling
+                self._enter_brewing()
             return
 
-        # Brewing finished
-        if self._current_power < self._brew_threshold and self._state == STATE_BREWING:
-            self._enter_dripping()
+        # Power below threshold while brewing: wait out element cycling
+        if self._state == STATE_BREWING:
+            if self._brew_end_timer is None:
+                self._brew_dropped_at = datetime.now()
+                self._brew_end_timer = async_call_later(
+                    self.hass,
+                    POWER_DEBOUNCE_SECONDS,
+                    self._brew_end_debounced,
+                )
             return
 
         # Machine fully off
         if self._current_power <= 0 and self._state in (STATE_DRIPPING, STATE_WARMING):
             self._handle_machine_off()
+
+    @callback
+    def _brew_end_debounced(self, _now) -> None:
+        """Power stayed below threshold long enough: the brew is finished."""
+
+        self._brew_end_timer = None
+
+        if self._state != STATE_BREWING:
+            return
+
+        self._enter_dripping(self._brew_dropped_at or datetime.now())
+
+    def _cancel_brew_end_timer(self) -> None:
+        """Cancel a pending brew-end debounce."""
+
+        if self._brew_end_timer:
+            self._brew_end_timer()
+            self._brew_end_timer = None
+
+        self._brew_dropped_at = None
 
     @callback
     def _handle_switch_change(self, event) -> None:
@@ -219,15 +270,17 @@ class BrewSenseCoordinator:
             _LOGGER.debug("Switch turned off, forcing off state")
             self._handle_machine_off()
 
-    def _update_current_power(self) -> None:
-        """Update the cached current power value."""
+    def _update_current_power(self) -> bool:
+        """Update the cached power value; return False if unavailable."""
 
         state = self.hass.states.get(self._power_sensor)
 
         try:
             self._current_power = float(state.state)
         except (TypeError, ValueError, AttributeError):
-            self._current_power = 0.0
+            return False
+
+        return True
 
     def _reconstruct_state_from_power(self) -> None:
         """Set a sensible startup state from current power."""
@@ -267,17 +320,15 @@ class BrewSenseCoordinator:
         self._start_brew_update_timer()
         self.async_update_listeners()
 
-    def _enter_dripping(self) -> None:
+    def _enter_dripping(self, finished_at: datetime) -> None:
         """Enter dripping state."""
 
         _LOGGER.debug("Entering dripping state")
 
         self._state = STATE_DRIPPING
-        self._brew_finished_at = datetime.now()
-        self._last_brew_finished_at = self._brew_finished_at
-        self._dripping_ends_at = (
-            datetime.now() + timedelta(seconds=self._drip_delay)
-        )
+        self._brew_finished_at = finished_at
+        self._last_brew_finished_at = finished_at
+        self._brew_dropped_at = None
 
         self._stop_brew_update_timer()
 
@@ -289,6 +340,13 @@ class BrewSenseCoordinator:
             self._state = STATE_OFF
             self.async_update_listeners()
             return
+
+        self._dripping_ends_at = (
+            datetime.now() + timedelta(seconds=self._drip_delay)
+        )
+
+        # A brew right after midnight on the 1st belongs to the new month
+        self._rollover_month_if_needed()
 
         self._last_brew_cups = finalized_cups
         self._session_cups = self._active_brew_start_cups + finalized_cups
@@ -324,6 +382,13 @@ class BrewSenseCoordinator:
 
         self._state = STATE_WARMING
         self._coffee_available = True
+
+        if self._current_power <= 0:
+            # No warming plate draw: the machine is already off, so let the
+            # coffee-available linger run instead of warming forever.
+            self._handle_machine_off()
+            return
+
         self.async_update_listeners()
 
 
@@ -443,26 +508,53 @@ class BrewSenseCoordinator:
 
         return max(1, cups)
 
-    def _rollover_month_if_needed(self) -> None:
+    @callback
+    def _handle_midnight(self, _now) -> None:
+        """Roll monthly statistics at the start of a new month."""
+
+        if self._rollover_month_if_needed():
+            self.async_update_listeners()
+
+    def _rollover_month_if_needed(self) -> bool:
         """Roll monthly statistics if the month changed."""
 
         month_key = self._month_key()
 
         if month_key == self._current_month:
-            return
+            return False
 
-        self._last_month_cups = self._month_cups
+        self._monthly_history[self._current_month] = self._month_cups
+
+        # Only carry the count over if it really was the previous month
+        if self._current_month == self._previous_month_key(month_key):
+            self._last_month_cups = self._month_cups
+        else:
+            self._last_month_cups = 0
+
         self._month_cups = 0
         self._current_month = month_key
         self._monthly_history.setdefault(month_key, 0)
 
         self.hass.async_create_task(self._save_storage())
 
+        return True
+
+    @staticmethod
+    def _previous_month_key(month_key: str) -> str:
+        """Return the key of the month before the given one."""
+
+        year, month = (int(part) for part in month_key.split("-"))
+
+        if month == 1:
+            return f"{year - 1}-12"
+
+        return f"{year}-{month - 1:02d}"
+
     @staticmethod
     def _month_key() -> str:
         """Return current month key."""
 
-        return datetime.now().strftime("%Y-%m")
+        return dt_util.now().strftime("%Y-%m")
 
     async def _load_storage(self) -> None:
         """Load persistent statistics."""
@@ -499,6 +591,7 @@ class BrewSenseCoordinator:
             "_drip_timer",
             "_linger_timer",
             "_dripping_update_timer",
+            "_brew_end_timer",
         ]:
             timer = getattr(self, timer_attr)
             if timer:
@@ -542,14 +635,12 @@ class BrewSenseCoordinator:
     def month_cups(self) -> int:
         """Return cups brewed this month."""
 
-        self._rollover_month_if_needed()
         return self._month_cups
 
     @property
     def last_month_cups(self) -> int:
         """Return cups brewed last month."""
 
-        self._rollover_month_if_needed()
         return self._last_month_cups
 
     @property
